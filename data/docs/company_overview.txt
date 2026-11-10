@@ -1,0 +1,29 @@
+COMPANY OVERVIEW
+================
+Company: RetailCo Analytics
+Founded: 2018
+Headquarters: Chennai, India
+Business: Multi-category retail operations across South Asia
+
+Regional Structure:
+  North region: Delhi, Chandigarh, Lucknow
+  South region: Chennai, Bengaluru, Hyderabad
+  East region:  Kolkata, Bhubaneswar
+  West region:  Mumbai, Pune, Ahmedabad
+  Central region: Indore, Bhopal, Nagpur
+
+Customer Segments:
+  Consumer:     Individual buyers, smaller order values
+  Corporate:    Business buyers, bulk orders
+  Home Office:  Remote workers, mix of products
+
+Product Categories:
+  Electronics: Highest revenue, highest return rate
+  Furniture:   Highest average order value, low returns
+  Office Supplies: High volume, low value
+  Clothing:    Seasonal demand, moderate returns
+  Food:        Perishable, consistent demand
+
+Revenue Model:
+  Primary: Direct product sales
+  Growth target: 15% YoY revenue growth

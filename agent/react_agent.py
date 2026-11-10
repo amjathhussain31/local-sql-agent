@@ -1,8 +1,4 @@
 # agent/react_agent.py
-"""
-LangChain ReAct agent — the brain of the entire system.
-Wires together: tools + memory + RAG + guardrails + Gemini.
-"""
 import os
 import sys
 import uuid
@@ -10,26 +6,41 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from langchain.agents import AgentExecutor, create_react_agent
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.tools import Tool
 from langchain.prompts import PromptTemplate
-from langchain_community.vectorstores import FAISS
 from langchain.memory import ConversationBufferWindowMemory
+from langchain_groq import ChatGroq
 
-from config import GEMINI_API_KEY, GEMINI_MODEL, SQLITE_DB_URL
-from tools.sql_executor     import execute_sql_as_string
-from tools.schema_fetcher   import get_schema, format_schema_for_prompt
-from tools.chart_builder    import build_chart_from_string
+from config import GROQ_API_KEY, GROQ_MODEL
+from memory.long_term import get_recent_history
+from tools.schema_fetcher import get_schema, get_schema_as_tool_input
+from tools.sql_executor import run_sql_as_string
+from tools.chart_builder import build_chart_from_string
 from tools.insight_generator import generate_insight_from_string
-from memory.long_term       import get_recent_history
 
 
-# ─────────────────────────────────────────
-# REACT PROMPT
-# ─────────────────────────────────────────
+REACT_PROMPT_TEMPLATE = """You are DataAgent — an enterprise data analyst AI connected to a PostgreSQL database.
 
-REACT_PROMPT_TEMPLATE = """You are a data analyst agent with access to a SQL database.
-You ONLY answer questions about data, databases, SQL queries, and analytics.
+ABSOLUTE RULES — follow these without exception:
+1. NEVER use "Action: None" — it is invalid. Always use a real tool or go to Final Answer.
+2. For off-topic questions (poems, weather, jokes, stories), go DIRECTLY to Final Answer:
+   Final Answer: I can only answer data and analytics questions about your database.
+3. For UPDATE/INSERT/ALTER questions: call sql_executor with the SQL — guardrails handle approval.
+4. For DELETE/DROP questions: call sql_executor with the SQL — guardrails will block it.
+5. Never put Final Answer and Action in the same step. One or the other, never both.
+6. chart_builder input must be ONLY a JSON array. No title. No extra text.
+7. The order_date column is stored as TEXT in PostgreSQL. ALWAYS use
+    TO_DATE(order_date, 'YYYY-MM-DD') when using EXTRACT or date functions.
+    NEVER use EXTRACT(field FROM order_date) directly — it will fail.
+    Correct: EXTRACT(YEAR FROM TO_DATE(order_date, 'YYYY-MM-DD'))
+    Wrong:   EXTRACT(YEAR FROM order_date)
+
+WORKFLOW for data questions:
+Step 1: Call schema_fetcher to confirm table and column names
+Step 2: Call sql_executor with the SQL query
+Step 3: Call insight_generator with results
+Step 4: Call chart_builder if results have numeric data
+Step 5: Final Answer with complete response
 
 TOOLS:
 ------
@@ -39,34 +50,49 @@ DATABASE SCHEMA:
 ----------------
 {schema}
 
-LONG TERM MEMORY (past queries):
----------------------------------
+LONG TERM MEMORY:
+-----------------
 {long_term_memory}
 
 CONVERSATION HISTORY:
 ---------------------
 {chat_history}
 
-INSTRUCTIONS:
--------------
-- Always use schema_fetcher first if you are unsure about table/column names
-- Always use rag_retriever to understand business terms before writing SQL
-- Use sql_executor to run the query — never guess results
-- Use insight_generator after every sql_executor call
-- Use chart_builder when results have numeric data
-- If a query is blocked by guardrails, explain why to the user politely
-- For follow-up questions, use conversation history to resolve references
+EXACT FORMAT — follow this precisely:
 
-Use this EXACT format for every step:
-
-Question: the input question you must answer
-Thought: your reasoning about what to do next
-Action: the tool to use — must be one of [{tool_names}]
+Question: the input question
+Thought: your reasoning about what to do
+Action: one tool from [{tool_names}]
 Action Input: the input to the tool
 Observation: the result of the tool
-... (repeat Thought/Action/Action Input/Observation as needed)
+... (repeat Thought/Action/Action Input/Observation)
 Thought: I now know the final answer
-Final Answer: your complete answer including the insight
+Final Answer: your complete answer to the user
+
+EXAMPLES:
+
+Example 1 — off-topic:
+Question: Write me a poem
+Thought: This is not a data question. I must go directly to Final Answer.
+Final Answer: I can only answer data and analytics questions about your database.
+
+Example 2 — UPDATE (agent calls sql_executor, guardrails return HITL signal):
+Question: Update stock of Laptop Pro 15 to 100
+Thought: This is an UPDATE. I will call sql_executor — guardrails will handle approval.
+Action: sql_executor
+Action Input: UPDATE products SET stock = 100 WHERE name = 'Laptop Pro 15'
+Observation: HITL_REQUIRED|||UPDATE products SET stock = 100 WHERE name = 'Laptop Pro 15'|||'UPDATE' requires human approval
+Thought: The guardrail requires human approval. I will inform the user.
+Final Answer: This query requires human approval before execution. Please use the approval panel.
+
+Example 3 — DELETE (blocked):
+Question: Delete all customers
+Thought: This is a DELETE. I will call sql_executor — guardrails will block it.
+Action: sql_executor
+Action Input: DELETE FROM customers
+Observation: ERROR: Blocked: 'DELETE' is permanently blocked.
+Thought: The guardrail blocked this. I will inform the user.
+Final Answer: This operation is permanently blocked. DELETE queries are not permitted.
 
 Begin!
 
@@ -74,122 +100,73 @@ Question: {input}
 Thought: {agent_scratchpad}"""
 
 
-# ─────────────────────────────────────────
-# TOOL DEFINITIONS
-# ─────────────────────────────────────────
-
-def build_tools(vectorstore: FAISS = None,
-                db_url: str = SQLITE_DB_URL) -> list:
-    """Builds and returns all 5 agent tools."""
-
-    def schema_fetcher_fn(_: str) -> str:
-        schema, source = get_schema(prefer_mcp=True)
-        return format_schema_for_prompt(schema)
-
-    def rag_retriever_fn(query: str) -> str:
-        if vectorstore is None:
-            return "RAG not available."
-        from rag.retriever import retrieve_context
-        return retrieve_context(vectorstore, query, k=3)
-
-    def sql_executor_fn(sql: str) -> str:
-        return execute_sql_as_string(sql, db_url=db_url, auto_approve=False)
-
-    def chart_builder_fn(data_json: str) -> str:
-        return build_chart_from_string(data_json)
-
-    def insight_generator_fn(input_str: str) -> str:
-        # input_str format: "query|||data_json"
-        parts = input_str.split("|||")
-        query = parts[0].strip() if len(parts) > 0 else ""
-        data  = parts[1].strip() if len(parts) > 1 else "{}"
-        return generate_insight_from_string(data, query)
-
-    return [
+def build_tools(vectorstore=None) -> list:
+    tools = [
         Tool(
             name="schema_fetcher",
-            func=schema_fetcher_fn,
+            func=get_schema_as_tool_input,
             description=(
-                "Fetches the full database schema including all table names, "
-                "column names, types, and foreign keys. "
-                "Use this first when unsure about table or column names. "
-                "Input: any string (ignored)."
-            )
-        ),
-        Tool(
-            name="rag_retriever",
-            func=rag_retriever_fn,
-            description=(
-                "Retrieves relevant documentation about column meanings, "
-                "business terms, and how to calculate metrics like return rate, "
-                "revenue, AOV, etc. "
-                "Input: your question or the business term you want to understand."
+                "Fetches the full database schema — tables, columns, foreign keys. "
+                "Call this first before writing any SQL."
             )
         ),
         Tool(
             name="sql_executor",
-            func=sql_executor_fn,
+            func=run_sql_as_string,
             description=(
-                "Executes a SQL SELECT query on the database and returns results. "
-                "Input: a complete, valid SQL SELECT statement. "
-                "Do not include markdown fences or backticks. "
-                "Only SELECT queries are allowed — others will be blocked."
+                "Executes SQL on Neon PostgreSQL via DBHub. "
+                "Input: raw SQL only — no markdown, no backticks. "
+                "SELECT runs automatically. "
+                "UPDATE/INSERT returns HITL_REQUIRED for human approval. "
+                "DELETE/DROP is permanently blocked. "
+                "Always call this for ANY SQL operation including UPDATE and DELETE."
             )
         ),
         Tool(
             name="insight_generator",
-            func=insight_generator_fn,
+            func=generate_insight_from_string,
             description=(
-                "Generates a plain-English summary of query results. "
-                "Input format: 'user question|||JSON array of result rows' "
-                "Example: 'sales by region|||[{\"region\":\"North\",\"total\":65000}]'"
+                "Generates plain-English summary from SQL results. "
+                "Input format: 'user question|||JSON array of result rows'"
             )
         ),
         Tool(
             name="chart_builder",
-            func=chart_builder_fn,
+            func=build_chart_from_string,
             description=(
-                "Builds a chart from query results. "
-                "Input: JSON array string of result rows. "
-                "Example: '[{\"region\":\"North\",\"sales\":65000}]' "
-                "Returns chart type and confirmation."
+                "Builds a Plotly chart from query results. "
+                "Input: JSON array string ONLY. No title. No extra text. "
+                "Example: [{\"region\":\"East\",\"sales\":74264.61}]"
             )
         ),
     ]
 
+    if vectorstore is not None:
+        from rag.retriever import retrieve_context
+        tools.append(Tool(
+            name="rag_retriever",
+            func=lambda q: retrieve_context(vectorstore, q),
+            description=(
+                "Searches enterprise documents: company reports, policies, portfolios. "
+                "Use ONLY for document questions, NOT for database queries."
+            )
+        ))
 
-# ─────────────────────────────────────────
-# AGENT BUILDER
-# ─────────────────────────────────────────
+    return tools
+
 
 def build_agent(memory: ConversationBufferWindowMemory,
-                vectorstore: FAISS = None,
-                db_url: str = SQLITE_DB_URL) -> AgentExecutor:
+                vectorstore=None) -> AgentExecutor:
 
-    # LLM selection — Groq or Gemini
-    from config import USE_GROQ, GROQ_API_KEY, GROQ_MODEL
-    if USE_GROQ:
-        from langchain_groq import ChatGroq
-        llm = ChatGroq(
-            model=GROQ_MODEL,
-            api_key=GROQ_API_KEY,
-            temperature=0
-        )
-        print(f"[agent] Using Groq — {GROQ_MODEL}")
-    else:
-        from langchain_google_genai import ChatGoogleGenerativeAI
-        llm = ChatGoogleGenerativeAI(
-            model=GEMINI_MODEL,
-            google_api_key=GEMINI_API_KEY,
-            temperature=0,
-            convert_system_message_to_human=True
-        )
-        print(f"[agent] Using Gemini — {GEMINI_MODEL}")
+    llm = ChatGroq(
+        model=GROQ_MODEL,
+        api_key=GROQ_API_KEY,
+        temperature=0
+    )
+    print(f"[agent] Using Groq — {GROQ_MODEL}")
 
-    # rest of build_agent() stays exactly the same
-    tools       = build_tools(vectorstore, db_url)
-    schema, _   = get_schema(prefer_mcp=True)
-    schema_text = format_schema_for_prompt(schema)
+    tools  = build_tools(vectorstore)
+    schema = get_schema()
 
     prompt = PromptTemplate(
         input_variables=[
@@ -207,47 +184,45 @@ def build_agent(memory: ConversationBufferWindowMemory,
         tools=tools,
         memory=memory,
         verbose=True,
-        max_iterations=8,
+        max_iterations=10,
         handle_parsing_errors=True,
         return_intermediate_steps=True
     )
 
+
 def run_agent(agent_executor: AgentExecutor,
               query: str,
-              session_id: str = None,
-              user_id: str = "default") -> dict:
-    """
-    Runs a query through the agent with full Langfuse tracing.
-    Every tool call, LLM call, and step is automatically traced
-    via the LangChain callback handler.
-    """
-    from observability.langfuse_client import get_langchain_handler, flush
+              session_id: str = None) -> dict:
 
     if session_id is None:
         session_id = str(uuid.uuid4())
 
-    long_term   = get_recent_history(n=3)
-    schema, _   = get_schema(prefer_mcp=True)
-    schema_text = format_schema_for_prompt(schema)
+    long_term = get_recent_history(n=3)
+    schema    = get_schema()
 
-    # Langfuse callback — traces entire agent run automatically
-    handler = get_langchain_handler(
-        session_id=session_id,
-        user_id=user_id,
-        trace_name=f"agent: {query[:50]}"
-    )
+    callbacks = []
+    try:
+        from observability.langfuse_client import get_langchain_handler, flush
+        handler   = get_langchain_handler(session_id=session_id,
+                                          trace_name=f"agent: {query[:50]}")
+        callbacks = [handler]
+    except Exception:
+        pass
 
     for attempt in range(3):
         try:
             result = agent_executor.invoke(
                 {
                     "input":            query,
-                    "schema":           schema_text,
+                    "schema":           schema,
                     "long_term_memory": long_term,
                 },
-                config={"callbacks": [handler]}   # <-- Langfuse wired here
+                config={"callbacks": callbacks}
             )
-            flush()
+            try:
+                flush()
+            except Exception:
+                pass
             return {
                 "output":     result.get("output", ""),
                 "steps":      result.get("intermediate_steps", []),
@@ -260,7 +235,6 @@ def run_agent(agent_executor: AgentExecutor,
                 print(f"[rate limit] Waiting {wait}s... retry {attempt+2}/3")
                 time.sleep(wait)
             else:
-                flush()
                 return {
                     "output":     "",
                     "steps":      [],

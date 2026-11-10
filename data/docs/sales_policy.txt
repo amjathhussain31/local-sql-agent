@@ -1,0 +1,27 @@
+SALES POLICY DOCUMENT
+======================
+Version: 2.1 | Effective: January 2024
+
+RETURN POLICY
+-------------
+Standard return window: 30 days from order date
+Electronics:     15 days (functional defects only after 15 days)
+Food items:      7 days (perishable)
+Furniture:       30 days (must be unassembled)
+Clothing:        30 days (unworn, tags attached)
+Office Supplies: 30 days (unopened packaging)
+
+Refund processing time: 5-7 business days
+
+DISCOUNT POLICY
+---------------
+Corporate customers: 8% base discount on orders above INR 10,000
+Home Office segment: 5% discount on Office Supplies
+Loyalty discount:    2% for customers with 10+ orders
+Seasonal:            Maximum 20% (requires manager approval)
+
+LOW STOCK POLICY
+----------------
+Alert threshold:  10 units remaining
+Critical:         5 units remaining
+Auto-reorder:     8 units remaining

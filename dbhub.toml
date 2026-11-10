@@ -1,0 +1,15 @@
+# dbhub.toml
+
+[[sources]]
+id  = "neon_prod"
+dsn = "postgresql://neondb_owner:npg_owa1Qzykc9YJ@ep-steep-pine-an4rhphs-pooler.c-6.us-east-1.aws.neon.tech/salesdb?sslmode=require&channel_binding=require"
+
+[[tools]]
+name            = "execute_sql"
+source          = "neon_prod"
+readonly        = false
+max_rows        = 200
+
+[[tools]]
+name            = "search_objects"
+source          = "neon_prod"

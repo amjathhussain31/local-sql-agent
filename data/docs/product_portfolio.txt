@@ -1,0 +1,35 @@
+PRODUCT PORTFOLIO
+=================
+
+ELECTRONICS
+-----------
+Laptop Pro 15:   INR 1,29,999 — Best seller Corporate segment
+                 Known issue: Battery replacement at 18 months
+Monitor 27in:    INR 34,999  — Popular Home Office, low returns
+USB-C Hub:       INR 4,999   — High volume, strong repeat purchase
+Wireless Mouse:  INR 2,999   — Entry product for new customers
+
+FURNITURE
+---------
+Standing Desk:   INR 44,999  — Highest AOV, 8-week lead time
+Office Chair:    INR 29,999  — 42% returns due to assembly difficulty
+Bookshelf:       INR 19,999  — DIY assembly, moderate demand
+
+OFFICE SUPPLIES
+---------------
+Stapler Set:     INR 1,299
+Notebook Pack:   INR 899
+Pen Set:         INR 699
+All essential for Corporate segment, high volume, low margin
+
+CLOTHING
+--------
+Polo Shirt:      INR 3,499  — Corporate uniform range
+Winter Jacket:   INR 8,999  — Seasonal Oct-Feb
+Sneakers:        INR 6,999  — Casual range
+Return rate 9.4% primarily size-related
+
+FOOD
+----
+Coffee Beans 1kg: INR 1,899 — 78% repeat purchase retention
+Protein Bar Box:  INR 2,499 — Corporate wellness favourite
