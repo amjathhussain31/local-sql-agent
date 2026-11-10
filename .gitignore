@@ -7,3 +7,5 @@ data/*.db
 memory_store/
 .DS_Store
 tests/
+dbhub.toml
+.streamlit/secrets.toml
